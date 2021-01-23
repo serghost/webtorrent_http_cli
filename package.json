@@ -1,0 +1,24 @@
+{
+    "name": "webtorrent_http_service",
+    "version": "1.0.0",
+    "description": "Interact with webtorrent client via HTTP API",
+    "main": "index.js",
+    "bin": {
+        "webtorrent-http": "./bin/server.js"
+    },
+    "dependencies": {
+        "express": "^4.17.1",
+        "minimist": "^1.2.5",
+        "node-webrtc": "^0.0.0",
+        "webtorrent-hybrid": ">= 4.0.3",
+        "wrtc": "^0.4.7"
+    },
+    "engines": {
+        "node": ">=10"
+    },
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "",
+    "license": "ISC"
+}

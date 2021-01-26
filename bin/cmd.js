@@ -74,190 +74,157 @@ app.get('/:infoHash', (req, res) => {
     var alreadyAddedInfoHashes = client.torrents.map(function(t) { return t.infoHash })
 
     var result = {}
-    
+
+    // I.  pre-ininitalization validations
     if (infoHash.length != 40) {
         result.status = "fail"
         result.reason = "Invalid info_hash length"
-        res.send(result)        
-    } else if (alreadyAddedInfoHashes.includes(infoHash)) { // check if torrent is already in the queue
+    }
+
+    if (alreadyAddedInfoHashes.includes(infoHash)) { // check if torrent is already in the queue
         result.status = "fail"
         result.reason = "Already added"
-        res.send(result)
+    }
+
+    // send failure immediately after failing pre-initialization validations
+    if (result.status == "fail") {
+        return res.send(result) // NB: early return here
     } else {
+        res.send({status: "in_progress"})
+    }
 
-        // construct torrentId with trackers
-        let torrentId = `magnet:?xt=urn:btih:${infoHash}&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=wss%3A%2F%2Ftracker.btorrent.xyz&tr=wss%3A%2F%2Ftracker.openwebtorrent.com`
+    
+    // II. initializing new torrent
+    
+    // construct torrentId with trackers
+    let torrentId = `magnet:?xt=urn:btih:${infoHash}&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=wss%3A%2F%2Ftracker.btorrent.xyz&tr=wss%3A%2F%2Ftracker.openwebtorrent.com`
+    
+    // obtain torrent metadata
+    const torrent = client.add(torrentId, {
+        // store: MemoryChunkStore,
+        path: `./downloads/${infoHash}/`
+    })
+
+    var intervalID = setInterval(pollMetadataStatus, 5000)
+    var attempt = 0
+
+    function pollMetadataStatus() {
+        attempt += 1
+        console.log(torrent.progress)
+        console.log(torrent.ready)
+        console.log(`attempt is ${attempt}`)
+        if (attempt > 10) {
+            clearInterval(intervalID)
+            torrent.destroy()
+
+            // return if we can't fetch metadata after some time
+            return updateTorrentCallback({
+                action: "update_status",
+                info_hash: infoHash,
+                status: "time_out",
+                reason: "Can't fetch torrent metadata"
+            })
+            
+        }
+    }
+
+    // III. New validations after loading metadata 
+    torrent.on('metadata', () => {
+
+        clearInterval(intervalID)
+
+        // this file is a candidate for saving
+        var supposedFile = torrent.files[0]
+
+        // begin validations
         
-        // obtain torrent metadata
-        const torrent = client.add(torrentId, {
-            // store: MemoryChunkStore,
-            path: `./${infoHash}/`
-        })
-
-        torrent.on('error', function (err) {
-            console.log(err);
-        })
-
-        client.on('error', function (err) {
-            console.log(err);
-        })
-        
-        var intervalID = setInterval(pollMetadataStatus, 1000)
-        var attempt = 0
-
-        // var timedOut = 0
-        
-
-        function pollMetadataStatus()
-        {
-            attempt += 1
-            console.log(torrent.progress)
-            console.log(torrent.ready)
-            console.log(`attempt is ${attempt}`)
-            if (attempt > 10) {
-                clearInterval(intervalID)
-                result.status = "fail"
-                result.reason = "Can't fetch torrent metadata"
-                result.timedOut = true
-                // :TODO: ensure we unload torrent after failed attempts
-                // runCallback({timedOut: true})
-            }
+        if (torrent.files.length > 1) {
+            torrent.destroy()
+            return updateTorrentCallback({
+                action: "update_status",
+                info_hash: infoHash,
+                status: "fail",
+                reason: "Only single-file torrents are supported at this moment"
+            })
         }
 
-        torrent.on('download', function (bytes) {
-
-            console.log('just downloaded: ' + bytes)
-            console.log('total downloaded: ' + torrent.downloaded)
-            console.log('download speed: ' + torrent.downloadSpeed)
-            console.log('progress: ' + torrent.progress)
-        })
-
-        // torrent.on('error'), function (err) {
-        //     console.log(err)
-        // }
         
-        torrent.on('metadata', () => {
-
-            // console.log(torrent)
-            // console.log(client)
-
-            clearInterval(intervalID)
-
-            // if (torrent.files.length > 1) {
-            //     result.status = "fail"
-            //     result.reason = "Only single-file torrents are supported at this moment"
-            // }
-
-            // // this file is a candidate for saving
-            var supposedFile = torrent.files[0]
-
-            // if (supposedFile.length > 5000000) {
-            //     result.status = "fail"
-            //     result.reason = "Files bigger than 5MB are not allowed at this moment"
-            // }
-
-            // var regexAll = /[^\\]*\.(\w+)$/
-            // var total = supposedFile.name.match(regexAll);
-            // var thisFilename = total[0];
-            // var thisExtension = total[1];
-
-            // var allowedExtensions = ["jpg", "jpeg", "png", "gif", "md", "markdown"]
-
-            // if (!allowedExtensions.includes(thisExtension)) {
-            //     result.status = "fail"
-            //     result.reason = `Only following extensions: ${allowedExtensions.join(', ')} are supported  at this moment`
-            // }
-                 
-            if (result.status != "fail") {
-                result.timedOut =  false
-                result.name = supposedFile.name
-                result.status = "success"
-                // res.send(result)
-                
-            } else {
-                torrent.destroy()
-                runCallback({status: status, reason: reason, timedOut: timedOut})
-                res.send(result)        
-            }                
-        })
-            // res.send(result)
-
-        torrent.on('done', () => {
-            var file = torrent.files[0]
-
-            console.log(file);
-            // Promise.allSettled(promises).
-            //     then((results) => results.forEach((result) => console.log(result.status)));
-            
-            updateContentCallback({
-                timedOut: result.timedOut,
-                p2p_network_id: "01",
+        if (supposedFile.length > 5000000) {
+            torrent.destroy()
+            return updateTorrentCallback({
+                action: "update_status",
                 info_hash: infoHash,
-                name: file.name,                    
-                path: `./${infoHash}/${file.name}`
-                // res: res
-                // content: fs.readFileSync(`./${infoHash}/${file.name}`, {encoding: 'base64'})
+                status: "fail",
+                reason: "Files bigger than 5MB are not allowed at this moment"
             })
+        }
+
+        var regexAll = /[^\\]*\.(\w+)$/
+        var total = supposedFile.name.match(regexAll);
+        var thisFilename = total[0];
+        var thisExtension = total[1];
+
+        var allowedExtensions = ["jpg", "jpeg", "png", "gif", "md", "markdown"]
+
+        if (!allowedExtensions.includes(thisExtension)) {
+            torrent.destroy()
+            return updateTorrentCallback({
+                action: "update_status",
+                info_hash: infoHash,
+                status: "fail",
+                reason: `Only following extensions: ${allowedExtensions.join(', ')} are supported  at this moment`
+            })
+        }
+        
+        // end validations
+
+        // if we are still here, the torrent is valid. waiting for ... 
+    })
+    // IV. download and send data back
+
+    torrent.on('done', () => {
+
+        return updateTorrentCallback({
+            action: "update_torrent_data",
+            status: "success",
+            info_hash: infoHash,
+            name: supposedFile.name,                    
+            path: `./downloads/${infoHash}/${file.name}`
         })
-
-            // torrent.on('done', function() {
-                
-              
-
-            //     // t = fs.readFileSync(`./${infoHash}/${file.name}`, {encoding: 'base64'})
-
-            //     // conso;e.t
-                    
-                        
-            // })
-        
-        // send a callback to rails server when files downloading is finished
-        
-    }
-
-    
-    
+    })
 })
-function updateTimedOutCallback(params) {
 
-}
+function updateTorrentCallback(params, attempt = 0) {
 
-function updateContentCallback(params, attempt = 0) {
+    // if the file is less than 20 kb, it may not have time to write. so we give several attempts to fs for reading
+    if (params.status == "success") {
+        if (attempt > 5) {
+            console.error(`Failed to write file to ${params.path} after 5 attemps`)
+            params.status = "fail"
+            params.reason = "Can't read file (hint: 20kb bug?)"
+        }
 
-    if (attempt > 5) throw `Failed to write file to ${params.path} after 5 attemps`
-    
-    if(!fs.existsSync(params.path)) {
-        console.log("File not written yet; try again in 100ms");
-        setTimeout(function() {
-            attempt += 1
-            updateContentCallback(params, attempt);
-        }, 10);
+        if(!fs.existsSync(params.path)) {
+            console.log("File not written yet; try again in 100ms");
+            setTimeout(function() {
+                updateContentCallback(params, attempt += 1);
+            }, 100);
+        } else {
+            params.content = fs.readFileSync(params.path, {encoding: 'base64'})
+        }
     }
 
-    // if (!params.timedOut) {
-    //     try { // statements to try
-    //         params.content = fs.readFileSync(params.path, {encoding: 'base64'})
-    //     }
-    //     catch (e) {
-    //         console.error(e); // pass exception object to error handler (i.e. your own function)
-        
-    //     }
-    // }
-    
-    console.log(params)
-    
     const data = JSON.stringify({
         params
     })
 
-    // POST   /api/torrents/:info_hash/set_timed_out(.:format)       torrents#set_timed_out
-    // POST   /api/torrents/:info_hash/update_content(.:format)      torrents#update_content
-    
-    const options = {
+    // possible actions :
+    // PUT   /api/torrents/:info_hash/update
+    const serverOptions = {
         hostname: 'localhost',
         port: 3000,
-        path: `/api/torrents/${params.infoHash}/update_content`,
-        method: 'POST',
+        path: `/api/torrents/${params.info_hash}/update`,
+        method: 'PUT',
         headers: {
             'Content-Type': 'application/json',
             'Content-Length': data.length

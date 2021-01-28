@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict'
 
+const log = require('why-is-node-running')
 
 const cp = require('child_process')
 const createTorrent = require('create-torrent')
@@ -68,6 +69,10 @@ app.get('/', function (req, res) {
 })
 
 app.get('/:infoHash', (req, res) => {
+
+    setTimeout(function () {
+        log() // logs out active handles that are keeping node running
+    }, 1000)
 
     var infoHash = req.params.infoHash;
 
@@ -184,11 +189,15 @@ app.get('/:infoHash', (req, res) => {
 
     torrent.on('done', () => {
 
+        var file =  torrent.files[0]
+
         return updateTorrentCallback({
             action: "update_torrent_data",
             status: "success",
             info_hash: infoHash,
-            name: supposedFile.name,                    
+            torrent_files_attributes: [{
+                name: file.name
+            }],
             path: `./downloads/${infoHash}/${file.name}`
         })
     })
@@ -207,10 +216,10 @@ function updateTorrentCallback(params, attempt = 0) {
         if(!fs.existsSync(params.path)) {
             console.log("File not written yet; try again in 100ms");
             setTimeout(function() {
-                updateContentCallback(params, attempt += 1);
+                updateTorrentCallback(params, attempt += 1);
             }, 100);
         } else {
-            params.content = fs.readFileSync(params.path, {encoding: 'base64'})
+            params.torrent_files_attributes[0].body = fs.readFileSync(params.path, {encoding: 'base64'})
         }
     }
 
@@ -223,7 +232,7 @@ function updateTorrentCallback(params, attempt = 0) {
     const serverOptions = {
         hostname: 'localhost',
         port: 3000,
-        path: `/api/torrents/${params.info_hash}/update`,
+        path: `/api/torrents/${params.info_hash}`,
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json',
@@ -231,7 +240,7 @@ function updateTorrentCallback(params, attempt = 0) {
         }
     }
 
-    const callbackReq = http.request(options, callbackRes => {
+    const callbackReq = http.request(serverOptions, callbackRes => {
         console.log(`statusCode: ${callbackRes.statusCode}`)
 
         callbackRes.on('data', d => {
@@ -245,6 +254,7 @@ function updateTorrentCallback(params, attempt = 0) {
 
     callbackReq.write(data)
     callbackReq.end()
+    return
 }
 
 
@@ -330,3 +340,5 @@ function gracefulExit () {
       .unref()
   })
 }
+
+

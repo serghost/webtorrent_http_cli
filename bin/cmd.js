@@ -1,7 +1,28 @@
 #!/usr/bin/env node
+
+// Небольшой сервис на экспрессе + webtorrent. Суть: эндпоинт экспресса должен принимать входящие запросы, содержащие инфохэш торрента, класть инфохэш в инстанс WebTorrent. Далее WebTorrent качает метадату, сами файлы и т.п. Это часть хобби-проекта, планирую заопенсорсить после mvp.
+
+// Зачем я делаю этот сервис? У библиотеки вебторрента есть cli версия, но она работает не как демон. Она НЕ позволяет добавлять новые торренты в рантайме => для каждого нового торрента создаётся свой процесс (новый клиент). Даже десяток торрентов слишком грузят систему при таком подходе. Решил так это обойти:
+//     Написал сервис, где создаётся клиент в глобальном неймспейсе, а при обращении по хттп в этот глобальный клиент добавляется новый торрент
+
+// `const WebTorrent = require('webtorrent-hybrid')`
+// `const express = require('express')`
+
+// `// start webtorrent client`
+// `var client = new WebTorrent()`
+// `app.get('/:infoHash', (req, res) => {`
+// `    console.log('currently added ${client.torrents.map(function(t) { return t.infoHash }).join("\n")}')`
+// ` // тут всякие валидации и ответ. если валидации не прошли, то сразу return, иначе идём качать торрент`
+// ` var torrent = client.add(torrentId, { path: './downloads/${infoHash}/' })`
+
+// Known issues
+// Баг с тредами: https://github.com/node-webrtc/node-webrtc/issues/614      
+
+
+
 'use strict'
 
-const log = require('why-is-node-running')
+// const log = require('why-is-node-running')
 
 const cp = require('child_process')
 const createTorrent = require('create-torrent')
@@ -58,6 +79,12 @@ const argv = minimist(process.argv.slice(2), {
     }
 })
 
+setInterval(() => {
+    if (typeof gc === 'function') {
+        gc()
+    }
+}, 500)
+
 // start webtorrent client
 var client = new WebTorrent()
 client.on('error', fatalError)
@@ -70,16 +97,18 @@ app.get('/', function (req, res) {
 
 app.get('/:infoHash', (req, res) => {
 
-    setTimeout(function () {
-        log() // logs out active handles that are keeping node running
-    }, 1000)
+    console.log(`currently added ${client.torrents.map(function(t) { return t.infoHash }).join("\n")}`)
+    
+    // setTimeout(function () {
+    //     log() // logs out active handles that are keeping node running
+    // }, 1000)
 
     var infoHash = req.params.infoHash;
 
     var alreadyAddedInfoHashes = client.torrents.map(function(t) { return t.infoHash })
 
     var result = {}
-
+    
     // I.  pre-ininitalization validations
     if (infoHash.length != 40) {
         result.status = "fail"
@@ -105,21 +134,30 @@ app.get('/:infoHash', (req, res) => {
     let torrentId = `magnet:?xt=urn:btih:${infoHash}&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=wss%3A%2F%2Ftracker.btorrent.xyz&tr=wss%3A%2F%2Ftracker.openwebtorrent.com`
     
     // obtain torrent metadata
-    const torrent = client.add(torrentId, {
-        // store: MemoryChunkStore,
+    var torrent = client.add(torrentId, {
         path: `./downloads/${infoHash}/`
     })
 
-    var intervalID = setInterval(pollMetadataStatus, 5000)
-    var attempt = 0
+    
 
-    function pollMetadataStatus() {
-        attempt += 1
-        console.log(torrent.progress)
-        console.log(torrent.ready)
-        console.log(`attempt is ${attempt}`)
-        if (attempt > 10) {
-            clearInterval(intervalID)
+    torrent.on('wire', updateMetadata)
+
+    function updateMetadata () {
+        console.log(
+            `fetching torrent metadata from ${torrent.numPeers} peers`,
+        )
+    }
+    // var intervalID = setInterval(pollMetadataStatus, 5000)
+    // var attempt = 0
+    pollMetadataStatus()
+
+            
+    function pollMetadataStatus(attempt = 0) {
+        console.log(`torrent is ready? ${torrent.ready}`)
+        console.log(`attempt N ${attempt}`)
+
+        if (attempt > 5) {
+
             torrent.destroy()
 
             // return if we can't fetch metadata after some time
@@ -129,14 +167,19 @@ app.get('/:infoHash', (req, res) => {
                 status: "time_out",
                 reason: "Can't fetch torrent metadata"
             })
-            
+        }        
+        
+        if (!torrent.ready) {
+            setTimeout(function() {
+                pollMetadataStatus(attempt += 1);
+            }, 5000);
         }
+        
+
     }
 
     // III. New validations after loading metadata 
     torrent.on('metadata', () => {
-
-        clearInterval(intervalID)
 
         // this file is a candidate for saving
         var supposedFile = torrent.files[0]
@@ -254,7 +297,6 @@ function updateTorrentCallback(params, attempt = 0) {
 
     callbackReq.write(data)
     callbackReq.end()
-    return
 }
 
 
@@ -288,11 +330,6 @@ process.on('SIGINT', gracefulExit)
 process.on('SIGTERM', gracefulExit)
 
 // helpers
-
-function fatalError (err) {
-   `Fatal error ${err.message || err}`
-    process.exit(1)
-}
 
 function handleWarning (err) {
   console.warn(`Warning: ${err.message || err}`)
